@@ -51,7 +51,7 @@ export default function VideoPlayer({ episodeId, title, duration, onNext, onPrev
         const blob = await response.blob();
         objectUrl = URL.createObjectURL(blob);
         setBlobUrl(objectUrl);
-      } catch (err) {
+      } catch {
         setError("Não foi possível carregar o vídeo. Tente novamente.");
       } finally {
         setLoading(false);
@@ -64,6 +64,13 @@ export default function VideoPlayer({ episodeId, title, duration, onNext, onPrev
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [episodeId]);
+
+  // ─── Sincroniza volume via ref ─────────────────────────────────────────────
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = volume;
+    }
+  }, [volume]);
 
   // ─── Controles ────────────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
@@ -185,7 +192,6 @@ export default function VideoPlayer({ episodeId, title, duration, onNext, onPrev
           onEnded={() => { setPlaying(false); onEnded(); }}
           onWaiting={() => setLoading(true)}
           onCanPlay={() => setLoading(false)}
-          volume={volume}
           muted={muted}
         />
       )}
