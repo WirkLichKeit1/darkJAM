@@ -6,7 +6,7 @@ import Link from "next/link";
 import { animeApi, episodeApi } from "@/lib/api";
 import { AnimeResponse, EpisodeResponse } from "@/types/api";
 import { Button, Badge, Skeleton } from "@/components/ui";
-import AnimeForm from "../AnimeForm";
+import AnimeForm from "../../AnimeForm";
 
 export default function EditAnimePage() {
   const { id } = useParams<{ id: string }>();
