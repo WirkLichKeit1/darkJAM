@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 const PUBLIC_ROUTES = ["/login", "/register"];
 const ADMIN_ROUTES = ["/admin"];
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const token = request.cookies.get("token")?.value;
   const userRaw = request.cookies.get("user")?.value;
