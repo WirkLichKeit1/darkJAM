@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { episodeApi } from "@/lib/api";
 import { EpisodeResponse } from "@/types/api";
 import { Skeleton } from "@/components/ui";
-import EpisodeForm from "../EpisodeForm";
+import EpisodeForm from "../../EpisodeForm";
 
 export default function EditEpisodePage() {
   const { id, epId } = useParams<{ id: string; epId: string }>();

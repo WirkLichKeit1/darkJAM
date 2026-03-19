@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import EpisodeForm from "./EpisodeForm";
+import EpisodeForm from "../EpisodeForm";
 
 export default function NewEpisodePage() {
   const { id } = useParams<{ id: string }>();

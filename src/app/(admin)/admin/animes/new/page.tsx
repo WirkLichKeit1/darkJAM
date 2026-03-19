@@ -1,4 +1,4 @@
-import AnimeForm from "./AnimeForm";
+import AnimeForm from "../AnimeForm";
 
 export default function NewAnimePage() {
   return (
