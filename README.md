@@ -1,7 +1,4 @@
-[Read in English](README.en.md)
-
-# anime-api
-...
+[🇺🇸 Read in English](README.en.md)
 
 # darkJAM
 
