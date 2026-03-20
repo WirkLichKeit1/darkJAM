@@ -1,36 +1,140 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# darkJAM
 
-## Getting Started
+Frontend for an anime streaming platform. Built with Next.js 16 using the App Router, with a custom video player, admin panel, and full watch history tracking.
 
-First, run the development server:
+## Tech stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Next.js 16** (App Router)
+- **React 19** + **TypeScript**
+- **Tailwind CSS 4** + CSS variables for theming
+- **Axios** for API requests with automatic JWT injection
+- **js-cookie** for token storage
+- **`proxy.ts`** for edge-level route protection
+
+## Requirements
+
+- Node.js 18+
+- npm, yarn, or pnpm
+- A running instance of [anime-api](../anime-api) (the backend)
+
+## Environment variables
+
+Create a `.env.local` file in the project root:
+
+```env
+# Used server-side only — by Route Handlers and Server Components
+# Not bundled into the client
+API_URL=http://localhost:8080
+
+# Used client-side by Axios (lib/api.ts)
+NEXT_PUBLIC_API_URL=http://localhost:8080
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+In development both variables point to the same address. In production on Vercel, add both as Environment Variables in the project settings. `API_URL` is never exposed to the browser.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Running locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev
+```
 
-## Learn More
+The application will be available at `http://localhost:3000`.
 
-To learn more about Next.js, take a look at the following resources:
+## Building for production
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run build
+npm run start
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Project structure
 
-## Deploy on Vercel
+```
+src/
+├── app/
+│   ├── (admin)/admin/      # Admin panel (Server Component layout with role check)
+│   │   ├── layout.tsx      # Auth guard — redirects non-admins server-side
+│   │   ├── AdminShell.tsx  # Sidebar and layout shell (client component)
+│   │   ├── page.tsx        # Dashboard with stats
+│   │   └── animes/         # Anime and episode CRUD
+│   ├── (auth)/             # Login and registration pages
+│   ├── (main)/             # Public-facing pages
+│   │   ├── animes/         # Anime listing, detail, and watch pages
+│   │   ├── favorites/      # User favorites
+│   │   └── history/        # Watch history
+│   └── api/
+│       └── stream/[episodeId]/
+│           └── route.ts    # Server-side proxy for video streaming
+├── components/
+│   ├── anime/              # AnimeCard, AnimeFilters
+│   ├── layout/             # Navbar, Footer
+│   ├── player/             # VideoPlayer
+│   └── ui/                 # Button, Input, Badge, Skeleton
+├── lib/
+│   ├── api.ts              # Axios instance and typed API functions
+│   ├── auth.ts             # Cookie-based token storage
+│   └── hooks/
+│       ├── useAuth.ts      # Login, register, logout
+│       └── useWatchProgress.ts  # Periodic progress saving + sendBeacon on unload
+├── proxy.ts                # Edge middleware for route protection
+└── types/
+    └── api.ts              # TypeScript types for all API contracts
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Authentication flow
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+After login, the JWT is stored in a cookie via `js-cookie`. The `proxy.ts` middleware runs at the edge and redirects unauthenticated requests to `/login` based on cookie presence.
+
+Admin route protection happens at two levels:
+
+1. **`proxy.ts`** — fast cookie check at the edge, redirects if no token is found
+2. **`src/app/(admin)/admin/layout.tsx`** — Server Component that reads the `user` cookie, parses the role, and calls `redirect()` before rendering anything if the role is not `ADMIN`
+
+This ensures that even if someone manually crafts a cookie with a token, the layout will catch a missing or invalid role on the server before any admin UI is sent to the client.
+
+## Video streaming
+
+Videos are not fetched directly from the backend by the browser. Instead, the player points its `src` to `/api/stream/[episodeId]`, which is a Next.js Route Handler that:
+
+1. Reads the JWT from the server-side cookie
+2. Forwards the request to the backend with an `Authorization` header
+3. Passes through `Range` headers for seek support
+4. Streams the response body directly without buffering it in memory
+
+This keeps the JWT out of client-side JavaScript entirely and allows streaming files of any size without loading them into the browser's memory.
+
+## Watch progress
+
+The `useWatchProgress` hook saves playback progress to the backend every 10 seconds during playback. When the user navigates away or closes the tab, a final save is sent using `navigator.sendBeacon` to ensure the request completes even as the page unloads.
+
+Progress is only saved for authenticated users. Unauthenticated playback works but progress is not persisted.
+
+## Admin panel
+
+The admin panel is accessible at `/admin`. Only users with the `ADMIN` role can access it — others are redirected to the home page.
+
+Features:
+- Dashboard with anime and status counts
+- Anime CRUD with cover and banner image upload
+- Episode CRUD with video and thumbnail upload
+- Video status tracking (Processing / Ready / Error)
+- Draft and published states for episodes
+
+## Deployment (Vercel)
+
+1. Connect the repository to a Vercel project
+2. Add environment variables in **Settings → Environment Variables**:
+   - `API_URL` — internal URL of the backend (e.g. `https://your-backend.onrender.com`)
+   - `NEXT_PUBLIC_API_URL` — same value, exposed to the browser for Axios
+3. Deploy
+
+The `proxy.ts` file is automatically picked up by Next.js 16 as the edge middleware entry point.
+
+## Linting
+
+```bash
+npm run lint
+```
+
+ESLint is configured with `eslint-config-next/core-web-vitals` and `eslint-config-next/typescript`.
