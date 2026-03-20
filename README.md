@@ -1,3 +1,8 @@
+[Read in English](README.en.md)
+
+# anime-api
+...
+
 # darkJAM
 
 Frontend de uma plataforma de streaming de animes. Construído com Next.js 16 usando o App Router, com player de vídeo customizado, painel administrativo e rastreamento completo de histórico de exibição.
