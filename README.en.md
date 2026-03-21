@@ -25,7 +25,7 @@ Create a `.env.local` file in the project root:
 
 ```env
 # Used server-side only — by Route Handlers and Server Components
-# Not bundled into the client
+# Never bundled into the client
 API_URL=http://localhost:8080
 
 # Used client-side by Axios (lib/api.ts)
@@ -55,33 +55,33 @@ npm run start
 ```
 src/
 ├── app/
-│   ├── (admin)/admin/      # Admin panel (Server Component layout with role check)
-│   │   ├── layout.tsx      # Auth guard — redirects non-admins server-side
-│   │   ├── AdminShell.tsx  # Sidebar and layout shell (client component)
-│   │   ├── page.tsx        # Dashboard with stats
-│   │   └── animes/         # Anime and episode CRUD
-│   ├── (auth)/             # Login and registration pages
-│   ├── (main)/             # Public-facing pages
-│   │   ├── animes/         # Anime listing, detail, and watch pages
-│   │   ├── favorites/      # User favorites
-│   │   └── history/        # Watch history
+│   ├── (admin)/admin/        # Admin panel
+│   │   ├── layout.tsx        # Auth guard — redirects non-admins server-side
+│   │   ├── AdminShell.tsx    # Sidebar and layout shell (client component)
+│   │   ├── page.tsx          # Dashboard with stats
+│   │   └── animes/           # Anime and episode CRUD
+│   ├── (auth)/               # Login and registration pages
+│   ├── (main)/               # Public-facing pages
+│   │   ├── animes/           # Anime listing, detail, and watch pages
+│   │   ├── favorites/        # User favorites
+│   │   └── history/          # Watch history
 │   └── api/
 │       └── stream/[episodeId]/
-│           └── route.ts    # Server-side proxy for video streaming
+│           └── route.ts      # Server-side proxy for video streaming
 ├── components/
-│   ├── anime/              # AnimeCard, AnimeFilters
-│   ├── layout/             # Navbar, Footer
-│   ├── player/             # VideoPlayer
-│   └── ui/                 # Button, Input, Badge, Skeleton
+│   ├── anime/                # AnimeCard, AnimeFilters
+│   ├── layout/               # Navbar, Footer
+│   ├── player/               # VideoPlayer
+│   └── ui/                   # Button, Input, Badge, Skeleton
 ├── lib/
-│   ├── api.ts              # Axios instance and typed API functions
-│   ├── auth.ts             # Cookie-based token storage
+│   ├── api.ts                # Axios instance and typed API functions
+│   ├── auth.ts               # Cookie-based token storage
 │   └── hooks/
-│       ├── useAuth.ts      # Login, register, logout
-│       └── useWatchProgress.ts  # Periodic progress saving + sendBeacon on unload
-├── proxy.ts                # Edge middleware for route protection
+│       ├── useAuth.ts        # Login, register, logout
+│       └── useWatchProgress.ts # Periodic saving + sendBeacon on unload
+├── proxy.ts                  # Edge middleware for route protection
 └── types/
-    └── api.ts              # TypeScript types for all API contracts
+    └── api.ts                # TypeScript types for all API contracts
 ```
 
 ## Authentication flow
@@ -90,10 +90,16 @@ After login, the JWT is stored in a cookie via `js-cookie`. The `proxy.ts` middl
 
 Admin route protection happens at two levels:
 
-1. **`proxy.ts`** — fast cookie check at the edge, redirects if no token is found
-2. **`src/app/(admin)/admin/layout.tsx`** — Server Component that reads the `user` cookie, parses the role, and calls `redirect()` before rendering anything if the role is not `ADMIN`
+1. **`proxy.ts`** — fast cookie check at the edge; redirects if no token is found
+2. **`src/app/(admin)/admin/layout.tsx`** — Server Component that reads the `user` cookie, validates the role, and calls `redirect()` before rendering anything if the role is not `ADMIN`
 
-This ensures that even if someone manually crafts a cookie with a token, the layout will catch a missing or invalid role on the server before any admin UI is sent to the client.
+This ensures that even if someone manually crafts a cookie with a token, the layout will catch an invalid role on the server before any admin UI is sent to the client.
+
+## Images (Cloudinary)
+
+Images (covers, banners, thumbnails) are served directly from Cloudinary's CDN. The backend returns full URLs (`https://res.cloudinary.com/...`) in the `coverImageUrl`, `bannerImageUrl`, and `thumbnailUrl` fields. The frontend uses these URLs directly in Next.js's `<Image>` component — without routing through the backend.
+
+`next.config.ts` has `res.cloudinary.com` configured in `remotePatterns` so the `<Image>` component accepts those URLs.
 
 ## Video streaming
 
@@ -108,13 +114,13 @@ This keeps the JWT out of client-side JavaScript entirely and allows streaming f
 
 ## Watch progress
 
-The `useWatchProgress` hook saves playback progress to the backend every 10 seconds during playback. When the user navigates away or closes the tab, a final save is sent using `navigator.sendBeacon` to ensure the request completes even as the page unloads.
+The `useWatchProgress` hook saves playback progress to the backend every 10 seconds. When the user navigates away or closes the tab, a final save is sent using `navigator.sendBeacon` to ensure the request completes even as the page unloads.
 
 Progress is only saved for authenticated users. Unauthenticated playback works but progress is not persisted.
 
 ## Admin panel
 
-The admin panel is accessible at `/admin`. Only users with the `ADMIN` role can access it — others are redirected to the home page.
+Accessible at `/admin`. Only users with the `ADMIN` role can access it — others are redirected to the home page.
 
 Features:
 - Dashboard with anime and status counts
