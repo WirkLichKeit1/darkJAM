@@ -120,7 +120,7 @@ export default function HistoryPage() {
                     }}>
                       {item.animeCoverImageUrl ? (
                         <Image
-                          src={`${process.env.NEXT_PUBLIC_API_URL}/${item.animeCoverImageUrl}`}
+                          src={item.animeCoverImageUrl}
                           alt={item.animeTitle}
                           fill
                           style={{ objectFit: "cover" }}

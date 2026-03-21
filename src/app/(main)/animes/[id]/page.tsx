@@ -100,7 +100,7 @@ export default function AnimeDetailPage() {
       <div style={{ position: "relative", height: "400px", overflow: "hidden" }}>
         {anime.bannerImageUrl ? (
           <Image
-            src={`${process.env.NEXT_PUBLIC_API_URL}/${anime.bannerImageUrl}`}
+            src={anime.bannerImageUrl}
             alt={anime.title}
             fill
             style={{ objectFit: "cover" }}
@@ -139,7 +139,7 @@ export default function AnimeDetailPage() {
           }}>
             {anime.coverImageUrl ? (
               <Image
-                src={`${process.env.NEXT_PUBLIC_API_URL}/${anime.coverImageUrl}`}
+                src={anime.coverImageUrl}
                 alt={anime.title}
                 fill
                 style={{ objectFit: "cover" }}
@@ -276,7 +276,7 @@ export default function AnimeDetailPage() {
                   }}>
                     {ep.thumbnailUrl ? (
                       <Image
-                        src={`${process.env.NEXT_PUBLIC_API_URL}/${ep.thumbnailUrl}`}
+                        src={ep.thumbnailUrl}
                         alt={ep.title}
                         fill
                         style={{ objectFit: "cover" }}

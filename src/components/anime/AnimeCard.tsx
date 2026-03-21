@@ -33,7 +33,7 @@ export default function AnimeCard({ anime }: AnimeCardProps) {
         <div style={{ position: "relative", aspectRatio: "2/3", backgroundColor: "var(--surface-alt)" }}>
           {anime.coverImageUrl ? (
             <Image
-              src={`${process.env.NEXT_PUBLIC_API_URL}/${anime.coverImageUrl}`}
+              src={anime.coverImageUrl}
               alt={anime.title}
               fill
               style={{ objectFit: "cover" }}

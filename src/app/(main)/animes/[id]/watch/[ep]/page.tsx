@@ -246,7 +246,7 @@ export default function WatchPage() {
                   }}>
                     {ep.thumbnailUrl ? (
                       <Image
-                        src={`${process.env.NEXT_PUBLIC_API_URL}/${ep.thumbnailUrl}`}
+                        src={ep.thumbnailUrl}
                         alt={ep.title}
                         fill
                         style={{ objectFit: "cover" }}

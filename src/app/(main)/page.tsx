@@ -41,7 +41,7 @@ export default function HomePage() {
           <Skeleton height="100%" borderRadius="0" />
         ) : featured?.bannerImageUrl ? (
           <Image
-            src={`${process.env.NEXT_PUBLIC_API_URL}/${featured.bannerImageUrl}`}
+            src={featured.bannerImageUrl}
             alt={featured.title}
             fill
             style={{ objectFit: "cover" }}
