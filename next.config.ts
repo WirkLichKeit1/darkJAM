@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       { protocol: "http", hostname: "localhost", port: "8080"},
       { protocol: "https", hostname: "*.onrender.com"},
-      { protocol: "http", hostname: "res.cloudinary.com"},
+      { protocol: "https", hostname: "res.cloudinary.com"},
     ],
   },
 
