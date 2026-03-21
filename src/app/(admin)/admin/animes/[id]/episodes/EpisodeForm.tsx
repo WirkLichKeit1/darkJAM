@@ -1,47 +1,75 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { episodeApi } from "@/lib/api";
-import { EpisodeResponse, EpisodeRequest, VideoStatus } from "@/types/api";
+import { EpisodeResponse, EpisodeRequest } from "@/types/api";
 import { Button, Input } from "@/components/ui";
+import Cookies from "js-cookie";
 
 interface EpisodeFormProps {
   animeId: number;
   initial?: EpisodeResponse;
 }
 
-// Simula progresso visual enquanto o backend processa.
-// O backend não expõe progresso real (o Cloudinary não retorna % durante chunked upload),
-// então animamos uma barra que avança até 90% e trava — os últimos 10% completam
-// quando o polling confirma que o status virou READY.
-function useSimulatedProgress(active: boolean) {
-  const [progress, setProgress] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+interface UploadSignature {
+  signature: string;
+  timestamp: number;
+  apiKey: string;
+  cloudName: string;
+  publicId: string;
+}
 
-  useEffect(() => {
-    if (active) {
-      setProgress(0);
-      // Avança ~1% a cada 3s, desacelerando perto de 90%
-      intervalRef.current = setInterval(() => {
-        setProgress((prev) => {
-          if (prev >= 90) return prev;
-          const increment = Math.max(0.3, (90 - prev) * 0.03);
-          return Math.min(90, prev + increment);
-        });
-      }, 3000);
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+/**
+ * Faz upload direto para o Cloudinary usando XMLHttpRequest,
+ * que expõe progresso real via upload.onprogress.
+ *
+ * O arquivo nunca passa pelo servidor Render — vai direto do browser
+ * para api.cloudinary.com, eliminando o problema de timeout/reinício.
+ */
+async function uploadToCloudinaryDirect(
+  file: File,
+  sig: UploadSignature,
+  onProgress: (percent: number) => void
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("public_id", sig.publicId);
+    formData.append("timestamp", String(sig.timestamp));
+    formData.append("api_key", sig.apiKey);
+    formData.append("signature", sig.signature);
+    // resource_type vai na URL, não no body
+
+    const xhr = new XMLHttpRequest();
+    const url = `https://api.cloudinary.com/v1_1/${sig.cloudName}/video/upload`;
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        onProgress(percent);
+      }
     };
-  }, [active]);
 
-  const complete = () => setProgress(100);
-  const reset = () => setProgress(0);
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          resolve(data.public_id as string);
+        } catch {
+          reject(new Error("Invalid response from Cloudinary"));
+        }
+      } else {
+        reject(new Error(`Cloudinary upload failed: ${xhr.status} ${xhr.statusText}`));
+      }
+    };
 
-  return { progress, complete, reset };
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
+
+    xhr.open("POST", url);
+    xhr.send(formData);
+  });
 }
 
 export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
@@ -60,44 +88,11 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
-  const [uploadingVideo, setUploadingVideo] = useState(false);
-  const [pollingEpisodeId, setPollingEpisodeId] = useState<number | null>(null);
-  const [videoStatus, setVideoStatus] = useState<VideoStatus | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadPhase, setUploadPhase] = useState<
+    "idle" | "uploading" | "confirming" | "done" | "error"
+  >("idle");
   const [error, setError] = useState<string | null>(null);
-
-  const { progress, complete: completeProgress, reset: resetProgress } =
-    useSimulatedProgress(uploadingVideo);
-
-  // Polling: consulta o status do episódio a cada 5s enquanto PROCESSING
-  useEffect(() => {
-    if (!pollingEpisodeId) return;
-
-    const poll = async () => {
-      try {
-        const ep = await episodeApi.getById(animeId, pollingEpisodeId);
-        setVideoStatus(ep.videoStatus);
-
-        if (ep.videoStatus === "READY") {
-          completeProgress();
-          setUploadingVideo(false);
-          setPollingEpisodeId(null);
-          // Redireciona após 1.5s para o usuário ver o 100%
-          setTimeout(() => router.push(`/admin/animes/${animeId}/edit`), 1500);
-        } else if (ep.videoStatus === "ERROR") {
-          setUploadingVideo(false);
-          setPollingEpisodeId(null);
-          resetProgress();
-          setError("O vídeo falhou ao ser processado. Tente enviar novamente.");
-        }
-        // Se ainda PROCESSING, continua o intervalo
-      } catch {
-        // Falha silenciosa no poll — tenta novamente no próximo ciclo
-      }
-    };
-
-    const interval = setInterval(poll, 5000);
-    return () => clearInterval(interval);
-  }, [pollingEpisodeId, animeId, completeProgress, resetProgress, router]);
 
   const set = (key: keyof EpisodeRequest, value: unknown) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -108,6 +103,7 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
     setError(null);
 
     try {
+      // 1. Cria/atualiza o episódio
       let episode: EpisodeResponse;
       if (isEditing) {
         episode = await episodeApi.update(animeId, initial!.id, form);
@@ -115,32 +111,66 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
         episode = await episodeApi.create(animeId, form);
       }
 
+      // 2. Thumbnail (pequena — upload normal via backend)
       if (thumbnailFile) {
         await episodeApi.uploadThumbnail(animeId, episode.id, thumbnailFile);
       }
 
+      // 3. Vídeo — upload direto frontend → Cloudinary
       if (videoFile) {
         setLoading(false);
-        setUploadingVideo(true);
-        setVideoStatus("PROCESSING");
+        setUploadPhase("uploading");
+        setUploadProgress(0);
 
-        // Envia o arquivo — o backend responde imediatamente (upload é async lá)
-        await episodeApi.uploadVideo(animeId, episode.id, videoFile);
+        // Pede a assinatura ao backend
+        const sig: UploadSignature = await episodeApi.getVideoUploadSignature(
+          animeId,
+          episode.id
+        );
 
-        // Inicia o polling para acompanhar o status real no Cloudinary
-        setPollingEpisodeId(episode.id);
+        // Faz upload direto para o Cloudinary com progresso real
+        const publicId = await uploadToCloudinaryDirect(
+          videoFile,
+          sig,
+          (percent) => setUploadProgress(percent)
+        );
+
+        // Notifica o backend para salvar o publicId e marcar como READY
+        setUploadPhase("confirming");
+        await episodeApi.confirmVideoUpload(animeId, episode.id, publicId);
+
+        setUploadPhase("done");
+        setUploadProgress(100);
+
+        setTimeout(() => {
+          router.push(`/admin/animes/${animeId}/edit`);
+        }, 1200);
       } else {
         router.push(`/admin/animes/${animeId}/edit`);
       }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })
-        ?.response?.data?.message;
-      setError(msg ?? "Erro ao salvar episódio.");
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data
+          ?.message ?? (err as Error)?.message ?? "Erro ao salvar episódio.";
+      setError(msg);
       setLoading(false);
-      setUploadingVideo(false);
-      resetProgress();
+      setUploadPhase("error");
     }
   };
+
+  const isUploading = uploadPhase === "uploading" || uploadPhase === "confirming";
+  const isSubmitting = loading || isUploading || uploadPhase === "done";
+
+  const progressLabel = {
+    idle: "",
+    uploading: `Enviando para o Cloudinary... ${uploadProgress}%`,
+    confirming: "Confirmando com o servidor...",
+    done: "Concluído!",
+    error: "",
+  }[uploadPhase];
+
+  const progressColor =
+    uploadPhase === "done" ? "#4ade80" : "var(--accent)";
 
   const selectStyle: React.CSSProperties = {
     backgroundColor: "var(--surface-alt)",
@@ -162,23 +192,15 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
     marginBottom: "0.4rem",
   };
 
-  const isSubmitting = loading || uploadingVideo;
-
-  const progressLabel =
-    videoStatus === "READY"
-      ? "Concluído!"
-      : progress < 30
-      ? "Enviando para o servidor..."
-      : progress < 70
-      ? "Fazendo upload para o Cloudinary..."
-      : progress < 90
-      ? "Quase lá..."
-      : "Finalizando processamento...";
-
   return (
     <form
       onSubmit={handleSubmit}
-      style={{ display: "flex", flexDirection: "column", gap: "1.25rem", maxWidth: "700px" }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "1.25rem",
+        maxWidth: "700px",
+      }}
     >
       <Input
         label="Título *"
@@ -187,7 +209,9 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
         required
       />
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}>
+      <div
+        style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "1rem" }}
+      >
         <Input
           label="Temporada"
           type="number"
@@ -209,7 +233,10 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
           min={1}
           value={form.durationSeconds ?? ""}
           onChange={(e) =>
-            set("durationSeconds", e.target.value ? Number(e.target.value) : undefined)
+            set(
+              "durationSeconds",
+              e.target.value ? Number(e.target.value) : undefined
+            )
           }
         />
       </div>
@@ -224,12 +251,23 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
         />
       </div>
 
-      <label style={{ display: "flex", alignItems: "center", gap: "0.75rem", cursor: "pointer" }}>
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.75rem",
+          cursor: "pointer",
+        }}
+      >
         <input
           type="checkbox"
           checked={form.published}
           onChange={(e) => set("published", e.target.checked)}
-          style={{ width: "16px", height: "16px", accentColor: "var(--accent)" }}
+          style={{
+            width: "16px",
+            height: "16px",
+            accentColor: "var(--accent)",
+          }}
         />
         <span style={{ fontSize: "0.875rem", fontWeight: 500 }}>
           Publicado (visível para usuários)
@@ -241,7 +279,8 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
         <label style={labelStyle}>
           Arquivo de vídeo {!isEditing && "*"}
           <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
-            {" "}(mp4, mkv, avi, webm)
+            {" "}
+            (mp4, mkv, avi, webm)
           </span>
         </label>
         <input
@@ -251,24 +290,44 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
           style={{ ...selectStyle, cursor: "pointer" }}
           disabled={isSubmitting}
         />
-        {videoFile && !uploadingVideo && (
-          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
+        {videoFile && uploadPhase === "idle" && (
+          <p
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--text-muted)",
+              marginTop: "0.35rem",
+            }}
+          >
             {(videoFile.size / 1_048_576).toFixed(1)} MB selecionado
           </p>
         )}
-        {initial?.videoStatus === "READY" && !videoFile && !uploadingVideo && (
-          <p style={{ fontSize: "0.75rem", color: "#4ade80", marginTop: "0.35rem" }}>
+        {initial?.videoStatus === "READY" && !videoFile && uploadPhase === "idle" && (
+          <p
+            style={{
+              fontSize: "0.75rem",
+              color: "#4ade80",
+              marginTop: "0.35rem",
+            }}
+          >
             ✓ Vídeo já enviado e pronto
           </p>
         )}
-        {initial?.videoStatus === "PROCESSING" && !videoFile && !uploadingVideo && (
-          <p style={{ fontSize: "0.75rem", color: "#fb923c", marginTop: "0.35rem" }}>
-            ⏳ Vídeo em processamento — aguarde ou envie outro arquivo para substituir
-          </p>
-        )}
+        {initial?.videoStatus === "PROCESSING" &&
+          !videoFile &&
+          uploadPhase === "idle" && (
+            <p
+              style={{
+                fontSize: "0.75rem",
+                color: "#fb923c",
+                marginTop: "0.35rem",
+              }}
+            >
+              ⏳ Vídeo em processamento — aguarde ou envie outro para substituir
+            </p>
+          )}
 
-        {/* Barra de progresso */}
-        {uploadingVideo && (
+        {/* Barra de progresso real */}
+        {(isUploading || uploadPhase === "done") && (
           <div style={{ marginTop: "0.75rem" }}>
             <div
               style={{
@@ -278,20 +337,21 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
                 marginBottom: "0.4rem",
               }}
             >
-              <span style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}>
+              <span
+                style={{ fontSize: "0.78rem", color: "var(--text-secondary)" }}
+              >
                 {progressLabel}
               </span>
               <span
                 style={{
                   fontSize: "0.78rem",
                   fontWeight: 700,
-                  color: videoStatus === "READY" ? "#4ade80" : "var(--accent)",
+                  color: progressColor,
                 }}
               >
-                {Math.round(progress)}%
+                {uploadPhase === "confirming" ? "99%" : `${uploadProgress}%`}
               </span>
             </div>
-            {/* Track */}
             <div
               style={{
                 width: "100%",
@@ -301,26 +361,22 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
                 overflow: "hidden",
               }}
             >
-              {/* Fill */}
               <div
                 style={{
                   height: "100%",
-                  width: `${progress}%`,
-                  backgroundColor: videoStatus === "READY" ? "#4ade80" : "var(--accent)",
+                  width:
+                    uploadPhase === "confirming"
+                      ? "99%"
+                      : `${uploadProgress}%`,
+                  backgroundColor: progressColor,
                   borderRadius: "6px",
-                  transition: "width 2s ease, background-color 0.3s ease",
+                  transition:
+                    uploadPhase === "done"
+                      ? "width 0.3s ease, background-color 0.3s ease"
+                      : "width 0.5s ease",
                 }}
               />
             </div>
-            <p
-              style={{
-                fontSize: "0.72rem",
-                color: "var(--text-muted)",
-                marginTop: "0.4rem",
-              }}
-            >
-              Vídeos grandes podem levar alguns minutos. Não feche esta aba.
-            </p>
           </div>
         )}
       </div>
@@ -336,7 +392,13 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
           disabled={isSubmitting}
         />
         {initial?.thumbnailUrl && !thumbnailFile && (
-          <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.35rem" }}>
+          <p
+            style={{
+              fontSize: "0.75rem",
+              color: "var(--text-muted)",
+              marginTop: "0.35rem",
+            }}
+          >
             ✓ Thumbnail atual mantida
           </p>
         )}
@@ -359,8 +421,10 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
 
       <div style={{ display: "flex", gap: "0.75rem", paddingTop: "0.5rem" }}>
         <Button type="submit" loading={isSubmitting} disabled={isSubmitting}>
-          {uploadingVideo
+          {isUploading
             ? "Enviando vídeo..."
+            : uploadPhase === "done"
+            ? "Concluído!"
             : loading
             ? "Salvando..."
             : isEditing

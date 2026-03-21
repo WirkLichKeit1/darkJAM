@@ -166,6 +166,28 @@ export const episodeApi = {
       headers: { "Content-Type": "multipart/form-data" },
     });
   },
+
+  getVideoUploadSignature: async (
+    animeId: number,
+    episodeId: number
+  ): Promise<{
+    signature: string;
+    timestamp: number;
+    apiKey: string;
+    cloudName: string;
+    publicId: string;
+  }> => {
+    const res = await api.post(`/api/animes/${animeId}/episodes/${episodeId}/video-signature`);
+    return res.data;
+  },
+
+  confirmVideoUpload: async (
+    animeId: number,
+    episodeId: number,
+    publicId: string
+  ): Promise<void> => {
+    await api.post(`/api/animes/${animeId}/episodes/${episodeId}/video-confirm`, { publicId });
+  },
 };
 
 // ─── Favorites ────────────────────────────────────────────────────────────────
