@@ -11,58 +11,70 @@ interface EpisodeFormProps {
   initial?: EpisodeResponse;
 }
 
+interface UploadSignature {
+  signature: string;
+  timestamp: number;
+  apiKey: string;
+  cloudName: string;
+  publicId: string;
+}
+
 /**
- * Faz upload do vídeo para /api/upload/video/[animeId]/[episodeId]
- * (Route Handler do Next.js no Vercel), que por sua vez faz o proxy
- * para o Cloudinary com a assinatura do backend.
- *
- * Isso elimina o problema de CORS: o browser só fala com o próprio
- * domínio Vercel, e o Vercel faz o upload para o Cloudinary server-side.
- *
- * O XMLHttpRequest é usado (em vez de fetch) porque expõe
- * upload.onprogress para a barra de progresso real.
+ * Upload direto browser → Cloudinary com assinatura SHA-1 gerada pelo backend.
+ * O Cloudinary aceita uploads signed de qualquer origem — não há restrição de CORS
+ * para uploads autenticados via assinatura.
  */
-async function uploadVideoViaProxy(
+async function uploadToCloudinaryDirect(
   file: File,
-  animeId: number,
-  episodeId: number,
+  sig: UploadSignature,
   onProgress: (percent: number) => void
-): Promise<void> {
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("public_id", sig.publicId);
+    formData.append("timestamp", String(sig.timestamp));
+    formData.append("api_key", sig.apiKey);
+    formData.append("signature", sig.signature);
 
     const xhr = new XMLHttpRequest();
-    const url = `/api/upload/video/${animeId}/${episodeId}`;
+    const url = `https://api.cloudinary.com/v1_1/${sig.cloudName}/video/upload`;
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
-        // A barra vai até 90% durante o upload do browser → Vercel.
-        // Os últimos 10% cobrem o trecho Vercel → Cloudinary (não visível ao browser).
-        const percent = Math.round((event.loaded / event.total) * 90);
-        onProgress(percent);
+        onProgress(Math.round((event.loaded / event.total) * 100));
       }
     };
 
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        let msg = `Erro no upload: status ${xhr.status}`;
         try {
           const data = JSON.parse(xhr.responseText);
-          if (data?.message) msg = data.message;
+          resolve(data.public_id as string);
+        } catch {
+          reject(new Error("Resposta inválida do Cloudinary"));
+        }
+      } else {
+        let msg = `Cloudinary retornou status ${xhr.status}`;
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data?.error?.message) msg = `Cloudinary: ${data.error.message}`;
         } catch {}
         reject(new Error(msg));
       }
     };
 
-    xhr.onerror = () => reject(new Error("Erro de rede durante o upload."));
+    xhr.onerror = () => {
+      reject(new Error(
+        "Erro de rede ao conectar com o Cloudinary. " +
+        "Verifique sua conexão e tente novamente."
+      ));
+    };
+
     xhr.ontimeout = () => reject(new Error("Timeout: o upload demorou muito."));
     xhr.timeout = 30 * 60 * 1000; // 30 minutos
 
     xhr.open("POST", url);
-    // Não define Content-Type — o browser define automaticamente com o boundary correto
     xhr.send(formData);
   });
 }
@@ -85,7 +97,7 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadPhase, setUploadPhase] = useState<
-    "idle" | "uploading" | "done" | "error"
+    "idle" | "uploading" | "confirming" | "done" | "error"
   >("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -114,13 +126,19 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
         setUploadPhase("uploading");
         setUploadProgress(0);
 
-        // Upload via Route Handler (sem CORS, com progresso real)
-        await uploadVideoViaProxy(
-          videoFile,
+        const sig: UploadSignature = await episodeApi.getVideoUploadSignature(
           animeId,
-          episode.id,
+          episode.id
+        );
+
+        const publicId = await uploadToCloudinaryDirect(
+          videoFile,
+          sig,
           (percent) => setUploadProgress(percent)
         );
+
+        setUploadPhase("confirming");
+        await episodeApi.confirmVideoUpload(animeId, episode.id, publicId);
 
         setUploadPhase("done");
         setUploadProgress(100);
@@ -142,17 +160,16 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
     }
   };
 
-  const isUploading = uploadPhase === "uploading";
+  const isUploading = uploadPhase === "uploading" || uploadPhase === "confirming";
   const isSubmitting = loading || isUploading || uploadPhase === "done";
 
-  const progressLabel =
-    uploadPhase === "uploading"
-      ? uploadProgress < 90
-        ? `Enviando... ${uploadProgress}%`
-        : "Processando no Cloudinary..."
-      : uploadPhase === "done"
-      ? "Concluído!"
-      : "";
+  const progressLabel = {
+    idle: "",
+    uploading: `Enviando para o Cloudinary... ${uploadProgress}%`,
+    confirming: "Confirmando com o servidor...",
+    done: "Concluído!",
+    error: "",
+  }[uploadPhase];
 
   const progressColor = uploadPhase === "done" ? "#4ade80" : "var(--accent)";
 
@@ -256,7 +273,6 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
           </p>
         )}
 
-        {/* Barra de progresso */}
         {(isUploading || uploadPhase === "done") && (
           <div style={{ marginTop: "0.75rem" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.4rem" }}>
@@ -264,23 +280,18 @@ export default function EpisodeForm({ animeId, initial }: EpisodeFormProps) {
                 {progressLabel}
               </span>
               <span style={{ fontSize: "0.78rem", fontWeight: 700, color: progressColor }}>
-                {uploadProgress}%
+                {uploadPhase === "confirming" ? "99%" : `${uploadProgress}%`}
               </span>
             </div>
             <div style={{ width: "100%", height: "6px", backgroundColor: "var(--border)", borderRadius: "6px", overflow: "hidden" }}>
               <div style={{
                 height: "100%",
-                width: `${uploadProgress}%`,
+                width: uploadPhase === "confirming" ? "99%" : `${uploadProgress}%`,
                 backgroundColor: progressColor,
                 borderRadius: "6px",
                 transition: "width 0.5s ease, background-color 0.3s ease",
               }} />
             </div>
-            {isUploading && uploadProgress >= 90 && (
-              <p style={{ fontSize: "0.72rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
-                Arquivo enviado — aguardando processamento no Cloudinary...
-              </p>
-            )}
           </div>
         )}
       </div>
