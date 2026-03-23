@@ -30,9 +30,26 @@ API_URL=http://localhost:8080
 
 # Used client-side by Axios (lib/api.ts)
 NEXT_PUBLIC_API_URL=http://localhost:8080
+
+# Cloudinary — required for video upload in the admin panel
+NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=your-cloud-name
+NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET=your-upload-preset
 ```
 
-In development both variables point to the same address. In production on Vercel, add both as Environment Variables in the project settings. `API_URL` is never exposed to the browser.
+In development, `API_URL` and `NEXT_PUBLIC_API_URL` point to the same address. In production on Vercel, add all of them as Environment Variables in the project settings. `API_URL` is never exposed to the browser.
+
+### Setting up the Cloudinary upload preset
+
+Video upload uses the Cloudinary Upload Widget with an **unsigned** preset. To create one:
+
+1. Go to [console.cloudinary.com](https://console.cloudinary.com) → **Settings → Upload → Upload presets → Add preset**
+2. Configure:
+   - **Signing mode:** Unsigned
+   - **Allowed formats:** mp4, mkv, avi, webm
+   - **Async:** disabled (important — async prevents the success callback from firing)
+3. Save and copy the preset name to `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET`
+
+> **Note:** the Cloudinary free plan limits uploads to 100 MB per file. For larger videos, a paid plan is required or the file must be compressed before uploading.
 
 ## Running locally
 
@@ -60,6 +77,8 @@ src/
 │   │   ├── AdminShell.tsx    # Sidebar and layout shell (client component)
 │   │   ├── page.tsx          # Dashboard with stats
 │   │   └── animes/           # Anime and episode CRUD
+│   │       └── [id]/episodes/
+│   │           └── EpisodeForm.tsx  # Form with Cloudinary Upload Widget
 │   ├── (auth)/               # Login and registration pages
 │   ├── (main)/               # Public-facing pages
 │   │   ├── animes/           # Anime listing, detail, and watch pages
@@ -101,6 +120,20 @@ Images (covers, banners, thumbnails) are served directly from Cloudinary's CDN. 
 
 `next.config.ts` has `res.cloudinary.com` configured in `remotePatterns` so the `<Image>` component accepts those URLs.
 
+## Video upload
+
+Video upload is entirely direct — the file goes from the browser to Cloudinary without touching the backend server (Render) or the Vercel proxy:
+
+1. Admin fills the form and clicks **"Create episode"**
+2. The episode is saved to the database
+3. The Cloudinary Upload Widget opens automatically
+4. The file is sent directly from the browser to Cloudinary (no intermediaries)
+5. On completion, the widget fires a callback with the `public_id`
+6. The frontend calls `POST /api/animes/{animeId}/episodes/{id}/video-confirm` with the `publicId`
+7. The backend saves the `publicId` and marks the episode as `READY`
+
+This architecture prevents Render from receiving large files, eliminating OOM risk and upload timeouts.
+
 ## Video streaming
 
 Videos are not fetched directly from the backend by the browser. Instead, the player points its `src` to `/api/stream/[episodeId]`, which is a Next.js Route Handler that:
@@ -125,7 +158,7 @@ Accessible at `/admin`. Only users with the `ADMIN` role can access it — other
 Features:
 - Dashboard with anime and status counts
 - Anime CRUD with cover and banner image upload
-- Episode CRUD with video and thumbnail upload
+- Episode CRUD with video upload (via Cloudinary Upload Widget) and thumbnail upload
 - Video status tracking (Processing / Ready / Error)
 - Draft and published states for episodes
 
@@ -133,8 +166,10 @@ Features:
 
 1. Connect the repository to a Vercel project
 2. Add environment variables in **Settings → Environment Variables**:
-   - `API_URL` — internal URL of the backend (e.g. `https://your-backend.onrender.com`)
+   - `API_URL` — backend URL (e.g. `https://your-backend.onrender.com`)
    - `NEXT_PUBLIC_API_URL` — same value, exposed to the browser for Axios
+   - `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` — Cloudinary account cloud name
+   - `NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET` — name of the unsigned upload preset created in Cloudinary
 3. Deploy
 
 The `proxy.ts` file is automatically picked up by Next.js 16 as the edge middleware entry point.
